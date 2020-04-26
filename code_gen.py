@@ -56,7 +56,7 @@ else:
     """
 
 MAIN_PROGRAM = """
-ACC[IDX_1] += RC * VAL;   
+ACC[IDX_1] += RC * VAL;
 """
 
 LOAD_SHARED = """
@@ -114,7 +114,8 @@ def generate_from_B(Ny_indices, B_indices,BA,block,NY,GY = None,A_offset=None):
 
     program = ""
 
-
+    # This is for the workers that are going to work with the instruction
+    # cache
     for group in range(GY):
         program += GROUP_CONTROL_START.replace("GROUP",str(group)) + "\n"
 
@@ -145,6 +146,25 @@ def generate_from_B(Ny_indices, B_indices,BA,block,NY,GY = None,A_offset=None):
         print(block,group)
         program += GROUP_CONTROL_END + "\n"
 
+    # Now for the groups that work with the data cache
+    # TODO: Currently writing the code only for NCHW
+    GY_offset = GY
+    for group in range(GY_offset, GY_offset + GY):
+        program += GROUP_CONTROL_START.replace("GROUP",str(group)) + "\n"
+	# We have to calculate the B_indices and the NY_indices that we skipped
+        program += textwrap.indent("for (int b_idx = 0; b_idx < B_dim; b_idx++)\n{\n", '\t')
+        program += textwrap.indent("for (int ny_idx = block_NY/2; ny_idx < block_NY; ny_idx++)\n{\n", '\t')
+        program += textwrap.indent("int a_idx = " + str(A_offset) + " + ny_idx;\n", '\t')
+        program += textwrap.indent("RC = BC[b_idx * "+str(C_dim)+" + lane];\n", '\t')
+        program += textwrap.indent("ACC[ny_idx] += RC * BA[b_idx, a_idx];\n", '\t')
+        program += textwrap.indent("}\n", '\t')
+        program += textwrap.indent("}\n", '\t')
+        program += GROUP_CONTROL_END + "\n"
+        
+        
+        
+        
+        
     return program
 
 
@@ -156,8 +176,12 @@ def get_idx_balanced(block,BA,A_offset,block_NY,GY=None):
     nnz_per_group = nnz // GY
     curr_group = 0
     curr_nnz = 0
+    # We shouldn't split this workload among the types of threads
+    # otherwise we will incur atomic writes
     for B_idx in range(B_dim):
-        for ny in range(block_NY):
+        # We can split this worload among the two types of threads
+        # assume block_NY is a multiple of 2
+        for ny in range(block_NY // 2):
             assert curr_group < GY
             A_idx = ny_to_a(ny,curr_group,block,A_dim = A_dim, A_offset=A_offset)
             if np.abs(BA[B_idx,A_idx]) > EPS:
@@ -209,7 +233,10 @@ def gencode(BA,outfile,C_dim,A_blocks,C_blocks,GY,name=None):
     #for block in range(1):
         A_offset = bounds[block]
         block_NY = bounds[block+1] - A_offset
+        # split these values because the dynamic code needs these
         program += BLOCK_CONTROL_START.replace("BLOCK", str(block)) + "\n"
+        program += "int A_offset = " + str(A_offset) + ";\n"
+        program += "int block_NY = " + str(block_NY) + ";\n"
         Ny_indices, B_indices = get_idx_balanced(block,BA,A_offset,block_NY,GY=GY)
 
         program += textwrap.indent(generate_from_B(Ny_indices,B_indices,BA,block,NY,GY=GY,A_offset=A_offset),"\t") + "\n"
@@ -217,8 +244,15 @@ def gencode(BA,outfile,C_dim,A_blocks,C_blocks,GY,name=None):
             if FUSE_END:
                 if GY > 1:
                     print("End fusion strategy not valid.")
-                for i in range(block_NY):
-                    program += BLOCK_END_REDUCTION.replace("OFFSET",str((A_offset + i) * C_dim)).replace("IDX",str(i)).replace("BIAS",str(bias[A_offset+i]))
+                # We will assume that the block_NY is a perfect multiple of 2
+                # and we can split the load among the two types of warps
+                for i in range(block_NY // 2):
+                    program += BLOCK_END_REDUCTION.replace("OFFSET", str((A_offset + i) * C_dim)).replace("IDX",str(i)).replace("BIAS",str(bias[A_offset+i]))
+                # Here we will have the reductions we skipped
+                program += "for (int i = block_NY/2; i < block_NY; i++)\n{\n"
+                program += BLOCK_END_REDUCTION.replace("OFFSET", "(A_offset + i) * " + str(C_dim)).replace("IDX","i").replace("BIASf", "bias[A_offset+i]")
+                    
+                program += "}"
             else:
                 program += BLOCK_END.replace("A_offset",str(A_offset)).replace("Ny",str(block_NY)).replace("A_BLOCKS",str(A_blocks)).replace(
             "C_BLOCKS", str(C_blocks)).replace("A_dim",str(A_dim)).replace("C_dim",str(C_dim)).replace("B_dim",str(B_dim)) + "\n"
@@ -228,7 +262,7 @@ def gencode(BA,outfile,C_dim,A_blocks,C_blocks,GY,name=None):
         program += BLOCK_CONTROL_END
 
     program += END_NONFUSED.replace("A_BLOCKS",str(A_blocks)).replace("C_BLOCKS", str(C_blocks)).replace("A_dim",str(A_dim)).\
-        replace("C_dim",str(C_dim)).replace("B_dim",str(B_dim)).replace("AB_sparse_tidy.npy",name)
+        replace("C_dim",str(C_dim)).replace("B_dim",str(B_dim)).replace("AB_sparse_tidy.npy",name).replace("bias_placeholder.npy", input_file_bias)
     open(outfile,"w").write(program.replace("B_dim",str(B_dim)))
 
 

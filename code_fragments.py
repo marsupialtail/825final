@@ -25,7 +25,7 @@ START_NONFUSED="""
 
 namespace cg = cooperative_groups;
 
-__global__ void mm(const float * __restrict__ BC, float * AC)
+__global__ void mm(const float * __restrict__ BC, const float * __restrict__ BA, const float * __restrict__ bias, float * AC)
 {
     register float ACC[Ny] = {0.0};
 	register float RC = 0.0;
@@ -49,7 +49,7 @@ __global__ void mm(const float * __restrict__ BC, float * AC)
 	int groupId = threadIdx.x / (Gsy);
 	int lane = threadIdx.x % (Gsy);
 """
-
+# this is not being used right now. So we will keep the dual mode only for NONFUSED
 START_FUSED="""
 #include <cnpy.h>
 
@@ -210,7 +210,6 @@ BLOCK_END="""
 """
 
 END_NONFUSED="""
- 
 }
 int main()
 {
@@ -230,16 +229,31 @@ int main()
 #else
 	assert(arr1.shape.size()==2 && arr1.shape[0] == B_dim && arr1.shape[1] == C_dim);
 #endif
+	
+	cnpy::NpyArray arr4 = cnpy::npy_load("bias_placeholder.npy");
+	float * bias = arr4.data<float>();
+	assert(arr4.word_size = sizeof(float));
+#if In_Format == 'NHWC'
+	assert(arr4.shape.size()==1 && arr4.shape[0] == A_dim);
+#else
+	assert(arr4.shape.size()==1 && arr4.shape[0] == A_dim);
+#endif
+	
     cnpy::NpyArray arr2 = cnpy::npy_load("ref.npy");
 	float * AC = arr2.data<float>();
     std::cout << AC[0] << std::endl;
 
 	float *d_BC, *d_AC;
+	float *d_BA, *d_bias;
 	cudaMalloc((void**)&d_BC, B_dim * C_dim *sizeof(float));
 	cudaMalloc((void**)&d_AC, A_dim * C_dim *sizeof(float));
+	cudaMalloc((void**)&d_BA, B_dim * A_dim *sizeof(float));
+	cudaMalloc((void**)&d_bias, B_dim * C_dim *sizeof(float));
 
 
 	cudaMemcpy( d_BC,BC, B_dim * C_dim *sizeof(float), cudaMemcpyHostToDevice);
+	cudaMemcpy( d_bias,bias, B_dim * C_dim *sizeof(float), cudaMemcpyHostToDevice);
+	cudaMemcpy( d_BA,AB, B_dim * A_dim *sizeof(float), cudaMemcpyHostToDevice);
 
 	float *result;
 	result = (float *)malloc(A_dim * C_dim *sizeof(result));
@@ -251,16 +265,16 @@ int main()
 	dim3 GS(A_BLOCKS,C_BLOCKS);
 
      std::cout << "warning: sometimes you might want to fix the launch dimensions to 32" << std::endl;
-
+    // We now launch twice the number of threads
     for(int i = 0;i < 1000;i ++){
-	    mm<<<GS,Gsy>>>(d_BC,d_AC);
+	    mm<<<GS,Gsy * 2>>>(d_BC,d_AC,d_BA,d_bias);
     }
 
 	cudaProfilerStart();
 	cudaEventRecord(start);
 
 	for(int i = 0;i < 1000;i ++){
-	    mm<<<GS,Gsy>>>(d_BC,d_AC);
+	    mm<<<GS,Gsy * 2>>>(d_BC,d_AC,d_BA,d_bias);
     }
 	cudaEventRecord(stop);
 	cudaProfilerStop();
@@ -270,6 +284,7 @@ int main()
 	cudaEventDestroy(start);
 	cudaEventDestroy(stop);
 	std::cout << "kernel used " << time / 1000.0 << std::endl;
+
 
 	cudaMemcpy(result, d_AC, A_dim * C_dim *sizeof(float), cudaMemcpyDeviceToHost);
 
@@ -292,6 +307,8 @@ int main()
 }
 """
 
+
+# this is not used for now
 END_FUSED="""
  
 }
