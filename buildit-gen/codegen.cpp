@@ -3,6 +3,7 @@
 #include "builder/builder.h"
 #include "blocks/c_code_generator.h"
 #include "builder/static_var.h"
+#include "builder/lib/utils.h"
 #include <cnpy.h>
 #include <cmath>
 
@@ -21,24 +22,14 @@ typedef std::vector<std::vector<std::vector<int>>> indices_t;
 typedef dyn_var<float(float, float)> max_f_t;
 
 
-void builder_up_cast_range(int_t &v, int range, int_s &s) {
-	for (s = 0; s < range-1; s++) {
-		if (s == v) {
-			return;
-		}
-	}
-}
 void mm(array_t &BC, array_t &AC, int_t &threadidx, int_t &blockidx, int_t &blockidy, array_t &ACC, float *BA, float *bias, const int A_dim, const int B_dim, const int C_dim, const int A_blocks, const int C_blocks, const int Gy, const int Ny, const int * bounds, indices_t &Ny_indices, indices_t &B_indices, max_f_t &max_f) {	
 	float_d RC = 0.0;
-	//int_t A_offset = blockidx * (A_dim / A_blocks);
 	int_t C_offset = blockidy * (C_dim / C_blocks);
 	int_t groupId = threadidx / (Gsy);
 	int_t lane = threadidx % (Gsy);
 
-	int_s block;
-	builder_up_cast_range(blockidx, A_blocks, block);
-	int_s group;
-	builder_up_cast_range(groupId, Gy, group);
+	int_s block = builder::up_cast_range(blockidx, A_blocks);
+	int_s group = builder::up_cast_range(groupId, Gy);
 
 	int_s A_offset = bounds[block];
 	int_s block_NY = bounds[block+1] - A_offset;
@@ -59,36 +50,24 @@ void mm(array_t &BC, array_t &AC, int_t &threadidx, int_t &blockidx, int_t &bloc
 }
 int* load_balancer2(float *BA, const int B_dim, const int A_dim, int A_blocks, int &NY) {
 	int total_nnz = 0;
-	for (int i = 0; i < B_dim * A_dim; i++) {
+	for (int i = 0; i < B_dim * A_dim; i++)
 		if (std::abs(BA[i]) > EPS)
 			total_nnz++;	
-	}
 	float nnz_per_block = (float)total_nnz / A_blocks;
 	int sums[A_dim];
 	int cumsums[A_dim];
 	for (int x = 0; x < A_dim; x++) {
 		sums[x] = 0;
-		for (int y = 0; y < B_dim; y++) {
+		for (int y = 0; y < B_dim; y++)
 			if (std::abs(BA[y * A_dim + x]) > EPS)
 				sums[x]++;
-		}
-		if (x > 0) {
-			cumsums[x] = cumsums[x-1] + sums[x];	
-		} else {
-			cumsums[x] = sums[x];
-		}
+		cumsums[x] = x ? cumsums[x-1] + sums[x]: sums[x];
 	}	
 	int * bounds = new int[A_blocks + 1];
-	for (int x = 0; x < A_blocks; x++) {
-		int arg = -1;
-		for (int y = 0; y < A_dim; y++) {
-			if (cumsums[y] > nnz_per_block * x) {
-				arg  = y;
+	for (int x = 0; x < A_blocks; x++) 
+		for (bounds[x] = 0; bounds[x] < A_dim; bounds[x]++) 
+			if (cumsums[bounds[x]] > nnz_per_block * x) 
 				break;
-			}
-		}
-		bounds[x] = arg;
-	}
 	bounds[A_blocks] = A_dim;
 	NY = -1;
 	for (int i = 1; i < A_blocks + 1; i++) {
@@ -205,7 +184,6 @@ int main(int argc, char* argv[]) {
 	auto ast = context.extract_ast_from_lambda([&] {
 		mm(BC, AC, threadidx, blockidx, blockidy, ACC, BA, bias, A_dim, B_dim, C_dim, A_blocks, C_blocks, Gy, Ny, bounds, Ny_indices, B_indices, max_f);
 	});			
-	//ast->dump(std::cout, 0);	
 	block::c_code_generator::generate_code(ast, std::cout, 0);	
 	
 }
