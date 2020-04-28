@@ -7,6 +7,7 @@ for A_blocks in 1 2 4; do
 					continue;
 				fi
 				bash eval.sh $A_blocks $C_blocks $Gy_i $Gy_d
+				rm -f build/run build/gencode.inc 
 			done
 		done
 	done

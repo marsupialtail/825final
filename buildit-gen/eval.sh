@@ -7,4 +7,3 @@ LD_LIBRARY_PATH=$$LD_LIBRARY_PATH:/data/scratch/ziheng/cnpy/build ./build/codege
 /usr/local/cuda/bin/nvcc driver.cu -I build -o build/run -I /data/scratch/ziheng/cnpy/ -L /data/scratch/ziheng/cnpy/build/ -lcnpy
 LD_LIBRARY_PATH=$$LD_LIBRARY_PATH:/data/scratch/ziheng/cnpy/build ./build/run ./build/AB.dat ./build/BC.npy ../mobilenet/contraction_1x1_1_bias.npy build/ref.npy || exit
 
-rm build/run build/gencode.inc 
