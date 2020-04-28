@@ -2,12 +2,13 @@ $(shell mkdir -p build)
 
 all: build/codegen
 
-build/codegen: codegen.cpp constants.h
-	g++ codegen.cpp -I /data/scratch/ajaybr/buildit/include/ -lbuildit -L /data/scratch/ajaybr/buildit/build/ -I /data/scratch/ziheng/cnpy -L /data/scratch/ziheng/cnpy/build -lcnpy -o build/codegen -rdynamic -O3
+build/codegen: codegen.cpp constants.h matrix.h
+	g++ codegen.cpp -I /data/scratch/ajaybr/buildit/include/ -lbuildit -L /data/scratch/ajaybr/buildit/build/ -I /data/scratch/ziheng/cnpy -L /data/scratch/ziheng/cnpy/build -lcnpy -o build/codegen -rdynamic -O3 -g
 
 clean:
 	rm -rf build
 
+.PHONY: run
+run: build/codegen driver.cu build/codegen matrix.h
+	bash autotune.sh
 
-run: build/codegen
-	./build/codegen 128 64 3136 1 98 1 ../mobilenet/contraction_1x1_1_transposed.npy ../mobilenet/contraction_1x1_1_bias.npy build/testing.cu NCHW NCHW	
