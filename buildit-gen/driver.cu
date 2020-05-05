@@ -34,7 +34,7 @@ int main(int argc, char* argv[]) {
 	cnpy::NpyArray arr4 = cnpy::npy_load(argv[3]);
         float * bias = arr4.data<float>();
         assert(arr4.word_size = sizeof(float));	
-	assert(arr4.shape.size()==1 && arr4.shape[0] == 128);	
+	assert(arr4.shape.size()==1 && arr4.shape[0] == A_dim);	
 
 	cnpy::NpyArray arr2 = cnpy::npy_load(argv[4]);
         float * AC = arr2.data<float>();
@@ -46,37 +46,54 @@ int main(int argc, char* argv[]) {
 	cudaMalloc((void**)&d_BC, B_dim * C_dim * sizeof(float));
 	cudaMalloc((void**)&d_AC, A_dim * C_dim * sizeof(float));
 	
-	AB_d.nnz = AB.nnz;	
+	AB_d = AB;
 	cudaMalloc((void**)&AB_d.row_val, AB_d.nnz * sizeof(int));
+	cudaMalloc((void**)&AB_d.columns, (AB_d.num_columns+1) * sizeof(int));
 	cudaMalloc((void**)&AB_d.values, AB_d.nnz * sizeof(float));
 	cudaMalloc((void**)&d_offsets, offsets_size * sizeof(int));	
 	cudaMalloc((void**)&d_bias, A_dim * sizeof(int));	
+
+
+	cudaMalloc((void**)&AB_d.rows, (AB_d.num_rows + 1) * sizeof(int));
+	cudaMalloc((void**)&AB_d.column_val, (AB_d.nnz) * sizeof(int));
+	cudaMalloc((void**)&AB_d.values_column, (AB_d.nnz) * sizeof(float));
 	
 	cudaMemcpy(d_BC, BC, B_dim * C_dim * sizeof(float), cudaMemcpyHostToDevice);
 	cudaMemcpy(d_bias, bias, A_dim * sizeof(float), cudaMemcpyHostToDevice);
 	cudaMemcpy(AB_d.row_val, AB.row_val, AB.nnz * sizeof(int), cudaMemcpyHostToDevice);
+	cudaMemcpy(AB_d.columns, AB.columns, (AB.num_columns+1) * sizeof(int), cudaMemcpyHostToDevice);
 	cudaMemcpy(AB_d.values, AB.values, AB.nnz * sizeof(float), cudaMemcpyHostToDevice);
 
-	cudaMemcpy(d_offsets, offsets, offsets_size * sizeof(int), cudaMemcpyHostToDevice);
+
+	cudaMemcpy(AB_d.rows, AB.rows, (AB.num_rows + 1) * sizeof(int), cudaMemcpyHostToDevice);
+	cudaMemcpy(AB_d.column_val, AB.column_val, (AB.nnz) * sizeof(int), cudaMemcpyHostToDevice);
+	cudaMemcpy(AB_d.values_column, AB.values_column, (AB.nnz) * sizeof(int), cudaMemcpyHostToDevice);
+	//cudaMemcpy(d_offsets, offsets, offsets_size * sizeof(int), cudaMemcpyHostToDevice);
 	
 	float *result;
 	result = new float[A_dim * C_dim];
 	
 	dim3 BS(A_blocks, C_blocks);
-	dim3 TS(Gy_i + Gy_d, C_dim/C_blocks);
+	dim3 TS(2, C_dim/C_blocks);
 
 	for (int i = 0; i < 1000; i++)	
-		mm<<<BS, TS>>>(d_BC, AB_d, d_bias, d_AC, d_offsets);
+		mm<<<BS, TS>>>(d_BC, AB_d, d_bias, d_AC);
 
+	cudaError_t code = cudaGetLastError();
+	if (code != 0)
+		printf("%s\n", cudaGetErrorString(code));
+
+	cudaDeviceSynchronize();
 	cudaEvent_t start,stop;
 	cudaEventCreate(&start);
 	cudaEventCreate(&stop);
 
 	cudaProfilerStart();
 	cudaEventRecord(start);
+	cudaEventSynchronize(stop);
 
 	for(int i = 0;i < 1000;i ++){
-		mm<<<BS, TS>>>(d_BC, AB_d, d_bias, d_AC, d_offsets);
+		mm<<<BS, TS>>>(d_BC, AB_d, d_bias, d_AC);
 	}
 
 	cudaEventRecord(stop);

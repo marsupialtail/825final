@@ -10,5 +10,6 @@ clean:
 
 .PHONY: run
 run: build/codegen driver.cu build/codegen matrix.h
-	bash autotune.sh
+	python make_BC.py ../mobilenet/contraction_1x1_1_transposed.npy 3136 NCHW NCHW ../mobilenet/contraction_1x1_1_bias.npy
+	bash eval.sh 1 49 1 1 
 
