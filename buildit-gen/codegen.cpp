@@ -26,17 +26,20 @@ typedef dyn_var<float(float, float)> max_f_t;
 // mm(BC, AC, threadidx, threadidy, blockidx, blockidy, ACC, BA, bias, A_dim, B_dim, C_dim, A_blocks, C_blocks, Gy_i, Gy_d, bounds, max_f, BA_d, bias_d);
 void mm(array_t &BC, array_t &AC, int_t &threadidx, int_t &threadidy, int_t &blockidx, int_t &blockidy, array_t &ACC, const sparse_matrix &AB, const float * bias, const int A_dim, const int B_dim, const int C_dim, const int A_blocks, const int C_blocks, const int Gy_i, const int Gy_d, std::vector<int> &bounds, const int* offsets, max_f_t &max_f, array_t &AB_values_d, dyn_var<int*> &AB_row_val_d, dyn_var<int*> &offsets_d, array_t &bias_d, dyn_var<int*> &AB_columns, array_t &smem, const int max_bound, dyn_var<int*> &AB_rows, dyn_var<int*> &AB_column_val, dyn_var<int*> &AB_values_column) {
 	float_d RC = (float)0.0f;
-	int_t c_index = blockidy * (C_dim/C_blocks) + threadidy;
-	int_t a_index = blockidx * (2) + threadidx;
+	int_t c_index = blockidy * (C_dim/C_blocks) + threadidx;
+	int_t a_index = blockidx * (2) + threadidy;
+
+	if(threadidx >= C_dim/C_blocks)
+		return;
+
 	
 	// Now we promote the a_index
-	int_s a_idx = builder::up_cast_range(a_index, A_blocks*2);
-	
-	if ((a_idx % 2 == 0)) {
+	//int_s a_idx = builder::up_cast_range(a_index, A_blocks*2);
+	int_s blockid = builder::up_cast_range(blockidx, A_blocks);
+	if (threadidy == 0) {
 		// iterate over the sparse matrix
-		int_s start_a = bounds[a_idx/2 * (Gy_i+Gy_d)];
-		int_s end_a = bounds[a_idx/2 * (Gy_i+Gy_d) + Gy_i];
-
+		int_s start_a = bounds[blockid * (Gy_i+Gy_d)];
+		int_s end_a = bounds[blockid * (Gy_i+Gy_d) + Gy_i];
 		for (int_s b_idx = 0; b_idx < B_dim; b_idx++) {
 			int_s loaded = false;
 			for (int_s a_it = AB.columns[b_idx]; a_it < AB.columns[b_idx+1]; a_it++) {
@@ -46,7 +49,7 @@ void mm(array_t &BC, array_t &AC, int_t &threadidx, int_t &threadidy, int_t &blo
 						RC = BC[b_idx * C_dim + c_index];
 						loaded = true;
 					}
-				
+
 					ACC[a_val - (int) start_a] = ACC[a_val - (int) start_a] + RC * AB.values[a_it];
 				}
 			}
@@ -56,28 +59,9 @@ void mm(array_t &BC, array_t &AC, int_t &threadidx, int_t &threadidy, int_t &blo
 			AC[a_it * C_dim + c_index] = max_f(ACC[(a_it - (int)start_a)] + bias[a_it], 0.0f);
 		}
 	} else {
-		int_s start_a = bounds[a_idx/2 * (Gy_i+Gy_d) + Gy_i];
-		int_s end_a = bounds[a_idx/2 * (Gy_i+Gy_d) + Gy_i + Gy_d];
-		// Do the same just use the dynamic loops this time
-/*
-		for (int_s b_idx = 0; b_idx < B_dim; b_idx = b_idx + 1) {
-			//int_t start = offsets_d[2 * (a_idx/2* B_dim + b_idx)];
-			//int_t end = offsets_d[2 * (a_idx/2* B_dim + b_idx)+1];
-			int_s start = offsets[2 * b_idx];
-			int_s end = offsets[2 * b_idx + 1];
-			//if (start != end)
-				//RC = BC[b_idx * C_dim + c_index];
-			for (int_t a_it = start; a_it < end; a_it = a_it + 1) {
-				int_t a_val = AB_row_val_d[a_it];
-				smem[max_bound * threadidy + a_val - start_a] = smem[max_bound * threadidy + a_val - start_a] + BC[b_idx * C_dim + c_index] * AB_values_d[a_it];
-				//ACC[a_val - start_a] = ACC[a_val - start_a] + RC * AB_values_d[a_it];
-			}
-		}
-		for (int_t a_it = start_a; a_it < (int)end_a; a_it = a_it + 1) {
-			//AC[a_it * C_dim + c_index] = max_f(ACC[(a_it - start_a)] + bias_d[a_it], 0.0);
-			AC[a_it * C_dim + c_index] = max_f(smem[max_bound * threadidy + (a_it - start_a)] + bias_d[a_it], 0.0);
-		}
-*/
+		int_s start_a = bounds[blockid * (Gy_i+Gy_d) + Gy_i];
+		int_s end_a = bounds[blockid * (Gy_i+Gy_d) + Gy_i + Gy_d];
+	
 		for (int_t a_idx = start_a; a_idx < end_a; a_idx = a_idx + 1) {
 			float_d acc = 0.0f;
 			for (int_t b_it = AB_rows[a_idx]; b_it < AB_rows[a_idx+1]; b_it = b_it + 1) {
@@ -102,6 +86,10 @@ std::vector<int> divide_A(sparse_matrix &AB, const int A_threads, int &max_bound
 		}
 	}
 	bounds.push_back(AB.num_rows);
+
+	while (bounds.size() < A_threads + 6)
+		bounds.push_back(AB.num_rows);
+		
 	for (auto a: bounds) {
 		std::cout << a << ", ";
 	}
@@ -287,10 +275,6 @@ int main(int argc, char* argv[]) {
 */	
 	oss << "void __global__ mm(const float * __restrict__ BC, const sparse_matrix AB, const float * __restrict__ bias, float *AC) {" << std::endl;
 	oss << "  register float ACC[" << max_bound << "] = {0.0}; " << std::endl;
-	//oss << "  float __shared__ smem[" << max_bound * C_dim/C_blocks << "];" << std::endl;
-	//oss << "  int __shared__ offsets_s[B_dim * 2];" << std::endl;
-	//oss << "  for(int _it = threadIdx.y * 2 + threadIdx.x; _it < " << max_bound * C_dim/C_blocks << "; _it += blockDim.x * blockDim.y) smem[_it] = 0.0; " << std::endl;
-  	//oss << "  for(int _it = threadIdx.y * 2 + threadIdx.x; _it < B_dim * 2; _it += blockDim.x * blockDim.y) offsets_s[_it] = offsets[blockIdx.x * B_dim * 2 + _it]; __syncthreads();" << std::endl;
 	block::c_code_generator::generate_code(ast, oss, 1);	
 	oss << "}" << std::endl;
 	output_file.close();

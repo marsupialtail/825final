@@ -13,6 +13,7 @@
 #include <time.h>
 #include <cuda_profiler_api.h>
 #include <cooperative_groups.h>
+#include <sys/time.h>
 
 //void __global__ mm(const float * __restrict__ BC, const sparse_matrix AB, const float * __restrict__ bias, float *AC, float *offsets)
 #include "gencode.inc"
@@ -74,7 +75,10 @@ int main(int argc, char* argv[]) {
 	result = new float[A_dim * C_dim];
 	
 	dim3 BS(A_blocks, C_blocks);
-	dim3 TS(2, C_dim/C_blocks);
+	//dim3 TS(2, C_dim/C_blocks);
+	int cthreads = (C_dim/C_blocks + 31)/32;
+	cthreads *= 32;
+	dim3 TS(cthreads, 2);
 
 	for (int i = 0; i < 1000; i++)	
 		mm<<<BS, TS>>>(d_BC, AB_d, d_bias, d_AC);
@@ -92,9 +96,15 @@ int main(int argc, char* argv[]) {
 	cudaEventRecord(start);
 	cudaEventSynchronize(stop);
 
+	struct timeval start_time;
+	struct timeval end_time;
+	cudaDeviceSynchronize();
+	gettimeofday(&start_time, NULL);	
 	for(int i = 0;i < 1000;i ++){
 		mm<<<BS, TS>>>(d_BC, AB_d, d_bias, d_AC);
 	}
+	cudaDeviceSynchronize();
+	gettimeofday(&end_time, NULL);	
 
 	cudaEventRecord(stop);
 	cudaProfilerStop();
@@ -104,7 +114,13 @@ int main(int argc, char* argv[]) {
 	cudaEventDestroy(start);
 	cudaEventDestroy(stop);
 	std::cout << "kernel used " << time / 1000.0 << std::endl;
-	
+
+	end_time.tv_sec -= start_time.tv_sec;
+	end_time.tv_usec -= start_time.tv_usec;
+	time = end_time.tv_sec + end_time.tv_usec/1e6;	
+
+	std::cout << "kernel used " << time / 1000.0 * 1000.0 << std::endl;
+
 	cudaMemcpy(result, d_AC, A_dim * C_dim * sizeof(float), cudaMemcpyDeviceToHost);
 	float error = 0 ;
 	for (int i = 0; i < A_dim * C_dim; i++) 
